@@ -608,7 +608,7 @@ public class ForgeChunkManager
             if (var2 == null)
             {
                 var2 = Maps.newHashMap();
-                config.categories.put(var1.getModId(), var2);
+                config.categories.put(var1.getModId(), (Map)var2);
             }
 
             return (Map)var2;

@@ -3,6 +3,10 @@ package net.minecraftforge.common;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Splitter;
 import com.google.common.collect.Maps;
+
+import cpw.mods.fml.common.Loader;
+import cpw.mods.fml.relauncher.FMLInjectionData;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
@@ -19,6 +23,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.Map.Entry;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import net.minecraft.server.Block;
 import net.minecraft.server.Item;
 import net.minecraftforge.common.Configuration$UnicodeInputStreamReader;
@@ -34,19 +41,37 @@ public class Configuration
     public static final String CATEGORY_ITEM = "item";
     public static final String ALLOWED_CHARS = "._-";
     public static final String DEFAULT_ENCODING = "UTF-8";
+    private static final Pattern CONFIG_START = Pattern.compile("START: \"([^\\\"]+)\"");
+    private static final Pattern CONFIG_END = Pattern.compile("END: \"([^\\\"]+)\"");
     private static final CharMatcher allowedProperties = CharMatcher.JAVA_LETTER_OR_DIGIT.or(CharMatcher.anyOf("._-"));
+    private static Configuration PARENT = null;
     File file;
-    public Map categories;
+    public Map<String, Map<String, Property>> categories = new TreeMap<String, Map<String, Property>>();
+    private Map<String, Configuration> children = new TreeMap<String, Configuration>();
     private Map customCategoryComments;
     private boolean caseSensitiveCustomCategories;
     public String defaultEncoding;
+    private String fileName = null;
+	public boolean isChild = false;
 
+	public Configuration() {}
+	
     public Configuration(File var1)
     {
-        this.categories = new TreeMap();
         this.customCategoryComments = Maps.newHashMap();
         this.defaultEncoding = "UTF-8";
         this.file = var1;
+        String basePath = ((File)(FMLInjectionData.data()[6])).getAbsolutePath().replace(File.separatorChar, '/').replace("/.", "");
+        String path = file.getAbsolutePath().replace(File.separatorChar, '/').replace("/./", "/").replace(basePath, "");
+        if (PARENT != null)
+        {
+            PARENT.setChild(path, this);
+            isChild = true;
+        }
+        else
+        {
+            load();
+        }
     }
 
     public Configuration(File var1, boolean var2)
@@ -169,7 +194,7 @@ public class Configuration
         if (var5 == null)
         {
             var5 = new TreeMap();
-            this.categories.put(var1, var5);
+            this.categories.put(var1, (Map)var5);
         }
 
         if (((Map)var5).containsKey(var2))
@@ -201,6 +226,10 @@ public class Configuration
 
     public void load()
     {
+    	if (PARENT != null && PARENT != this)
+        {
+            return;
+        }
         BufferedReader var1 = null;
 
         try
@@ -218,7 +247,7 @@ public class Configuration
                     this.defaultEncoding = var2.getEncoding();
                     var1 = new BufferedReader(var2);
                     Object var4 = null;
-                    boolean var8;
+                    boolean var8 = false;
 
                     do
                     {
@@ -229,6 +258,26 @@ public class Configuration
                             return;
                         }
 
+                        Matcher start = CONFIG_START.matcher(var3);
+                        Matcher end = CONFIG_END.matcher(var3);
+
+                        if (start.matches())
+                        {
+                            fileName = start.group(1);
+                            categories = new TreeMap<String, Map<String, Property>>();
+                            customCategoryComments = Maps.newHashMap();
+                            continue;
+                        }
+                        else if (end.matches())
+                        {
+                            fileName = end.group(1);
+                            Configuration child = new Configuration();
+                            child.categories = categories;
+                            child.customCategoryComments = customCategoryComments;
+                            this.children.put(fileName, child);
+                            continue;
+                        }
+                        
                         int var5 = -1;
                         int var6 = -1;
                         boolean var7 = false;
@@ -281,7 +330,7 @@ public class Configuration
                                             if (var4 == null)
                                             {
                                                 var4 = new TreeMap();
-                                                this.categories.put(var10, var4);
+                                                this.categories.put(var10, (Map)var4);
                                             }
 
                                             break;
@@ -337,69 +386,154 @@ public class Configuration
 
     public void save()
     {
+    	if (PARENT != null && PARENT != this)
+        {
+            PARENT.save();
+            return;
+        }
+
         try
         {
-            if (this.file.getParentFile() != null)
+            if (file.getParentFile() != null)
             {
-                this.file.getParentFile().mkdirs();
+                file.getParentFile().mkdirs();
             }
 
-            if (!this.file.exists() && !this.file.createNewFile())
+            if (!file.exists() && !file.createNewFile())
             {
                 return;
             }
 
-            if (this.file.canWrite())
+            if (file.canWrite())
             {
-                FileOutputStream var1 = new FileOutputStream(this.file);
-                BufferedWriter var2 = new BufferedWriter(new OutputStreamWriter(var1, this.defaultEncoding));
-                var2.write("# Configuration file\r\n");
-                var2.write("# Generated on " + DateFormat.getInstance().format(new Date()) + "\r\n");
-                var2.write("\r\n");
-                Iterator var3 = this.categories.entrySet().iterator();
+                FileOutputStream fos = new FileOutputStream(file);
+                BufferedWriter buffer = new BufferedWriter(new OutputStreamWriter(fos, defaultEncoding));
 
-                while (var3.hasNext())
+                buffer.write("# Configuration file\r\n");
+                buffer.write("# Generated on " + DateFormat.getInstance().format(new Date()) + "\r\n");
+                buffer.write("\r\n");
+
+                if (children.isEmpty())
                 {
-                    Entry var4 = (Entry)var3.next();
-                    var2.write("####################\r\n");
-                    var2.write("# " + (String)var4.getKey() + " \r\n");
-                    String var5;
-
-                    if (this.customCategoryComments.containsKey(var4.getKey()))
+                    save(buffer);
+                }
+                else
+                {
+                    for (Map.Entry<String, Configuration> entry : children.entrySet())
                     {
-                        var2.write("#===================\r\n");
-                        var5 = (String)this.customCategoryComments.get(var4.getKey());
-                        Splitter var6 = Splitter.onPattern("\r?\n");
-                        Iterator var7 = var6.split(var5).iterator();
-
-                        while (var7.hasNext())
-                        {
-                            String var8 = (String)var7.next();
-                            var2.write("# ");
-                            var2.write(var8 + "\r\n");
-                        }
+                        buffer.write("START: \"" + entry.getKey() + "\"\r\n");
+                        entry.getValue().save(buffer);
+                        buffer.write("END: \"" + entry.getKey() + "\"\r\n\r\n");
                     }
-
-                    var2.write("####################\r\n\r\n");
-                    var5 = (String)var4.getKey();
-
-                    if (!allowedProperties.matchesAllOf(var5))
-                    {
-                        var5 = '\"' + var5 + '\"';
-                    }
-
-                    var2.write(var5 + " {\r\n");
-                    this.writeProperties(var2, ((Map)var4.getValue()).values());
-                    var2.write("}\r\n\r\n");
                 }
 
-                var2.close();
-                var1.close();
+                buffer.close();
+                fos.close();
             }
         }
-        catch (IOException var9)
+        catch (IOException e)
         {
-            var9.printStackTrace();
+            e.printStackTrace();
+        }
+//    	if (PARENT != null && PARENT != this)
+//        {
+//            PARENT.save();
+//            return;
+//        }
+//    	
+//        try
+//        {
+//            if (this.file.getParentFile() != null)
+//            {
+//                this.file.getParentFile().mkdirs();
+//            }
+//
+//            if (!this.file.exists() && !this.file.createNewFile())
+//            {
+//                return;
+//            }
+//
+//            if (this.file.canWrite())
+//            {
+//                FileOutputStream var1 = new FileOutputStream(this.file);
+//                BufferedWriter var2 = new BufferedWriter(new OutputStreamWriter(var1, this.defaultEncoding));
+//                var2.write("# Configuration file\r\n");
+//                var2.write("# Generated on " + DateFormat.getInstance().format(new Date()) + "\r\n");
+//                var2.write("\r\n");
+//                Iterator var3 = this.categories.entrySet().iterator();
+//
+//                while (var3.hasNext())
+//                {
+//                    Entry var4 = (Entry)var3.next();
+//                    var2.write("####################\r\n");
+//                    var2.write("# " + (String)var4.getKey() + " \r\n");
+//                    String var5;
+
+//                    if (this.customCategoryComments.containsKey(var4.getKey()))
+//                    {
+//                        var2.write("#===================\r\n");
+//                        var5 = (String)this.customCategoryComments.get(var4.getKey());
+//                        Splitter var6 = Splitter.onPattern("\r?\n");
+//                        Iterator var7 = var6.split(var5).iterator();
+//
+//                        while (var7.hasNext())
+//                        {
+//                            String var8 = (String)var7.next();
+//                            var2.write("# ");
+//                            var2.write(var8 + "\r\n");
+//                        }
+//                    }
+//
+//                    var2.write("####################\r\n\r\n");
+//                    var5 = (String)var4.getKey();
+//
+//                    if (!allowedProperties.matchesAllOf(var5))
+//                    {
+//                        var5 = '\"' + var5 + '\"';
+//                    }
+//
+//                    var2.write(var5 + " {\r\n");
+//                    this.writeProperties(var2, ((Map)var4.getValue()).values());
+//                    var2.write("}\r\n\r\n");
+//                }
+//
+//                var2.close();
+//                var1.close();
+//            }
+//        }
+//        catch (IOException var9)
+//        {
+//            var9.printStackTrace();
+//        }
+    }
+    
+    private void save(BufferedWriter out) throws IOException
+    {
+        for(Map.Entry<String, Map<String, Property>> category : categories.entrySet())
+        {
+            out.write("####################\r\n");
+            out.write("# " + category.getKey() + " \r\n");
+            if (customCategoryComments.containsKey(category.getKey()))
+            { 
+                out.write("#===================\r\n");
+                String comment = (String) customCategoryComments.get(category.getKey());
+                Splitter splitter = Splitter.onPattern("\r?\n");
+                for (String commentLine : splitter.split(comment))
+                {
+                    out.write("# ");
+                    out.write(commentLine+"\r\n");
+                }
+            }
+            out.write("####################\r\n\r\n");
+
+            String catKey = category.getKey();
+            if (!allowedProperties.matchesAllOf(catKey))
+            {
+                catKey = '"'+catKey+'"';
+            }
+            out.write(catKey + " {\r\n");
+            writeProperties(out, category.getValue().values());
+            out.write("}\r\n\r\n");
         }
     }
 
@@ -443,6 +577,27 @@ public class Configuration
             var1.write("   " + var8 + "=" + var4.value);
             var1.write("\r\n");
         }
+    }
+    
+    private void setChild(String name, Configuration child)
+    {
+        if (!children.containsKey(name))
+        {
+            children.put(name, child);
+        }
+        else
+        {
+            Configuration old = children.get(name);
+            child.categories = old.categories;
+            child.customCategoryComments = old.customCategoryComments;
+            child.fileName = old.fileName;
+        }
+    }
+    
+    public static void enableGlobalConfig()
+    {
+        PARENT = new Configuration(new File(Loader.instance().getConfigDir(), "global.cfg"));
+        PARENT.load();
     }
 
     static

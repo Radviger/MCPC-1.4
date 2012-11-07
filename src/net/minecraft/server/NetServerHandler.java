@@ -1,8 +1,10 @@
 package net.minecraft.server;
 
 import cpw.mods.fml.common.network.FMLNetworkHandler;
+import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.Event$Result;
 import net.minecraftforge.event.ForgeEventFactory;
+import net.minecraftforge.event.ServerChatEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent$Action;
 import java.io.ByteArrayInputStream;
@@ -832,7 +834,7 @@ public class NetServerHandler extends NetHandler {
                     this.sendPacket(new Packet3Chat("Cannot send chat message."));
                     return;
                 }
-
+                
                 this.chat(s, packet3chat.a_());
             }
         }
@@ -857,7 +859,15 @@ public class NetServerHandler extends NetHandler {
                 Player player = this.getPlayer();
                 AsyncPlayerChatEvent event = new AsyncPlayerChatEvent(async, player, s, new LazyPlayerSet());
                 this.server.getPluginManager().callEvent(event);
-
+                
+                s = "<" + player.getDisplayName() + "> " + s;
+                ServerChatEvent forgeEvent = new ServerChatEvent(this.player, s, "<" + player.getDisplayName() + "> " + s);
+                if (MinecraftForge.EVENT_BUS.post(forgeEvent))
+                {
+                    return;
+                }
+                s = forgeEvent.line;
+                
                 if (PlayerChatEvent.getHandlerList().getRegisteredListeners().length != 0) {
                     // Evil plugins still listening to deprecated event
                     final PlayerChatEvent queueEvent = new PlayerChatEvent(player, event.getMessage(), event.getFormat(), event.getRecipients());
